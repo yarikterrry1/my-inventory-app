@@ -1,13 +1,72 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Распознавание акта</title>
+  <title>📄 Распознавание текста с фото</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: auto; }
+    button, input { padding: 10px; margin: 10px 0; width: 100%; }
+    video { width: 100%; max-width: 600px; margin-top: 10px; }
+    canvas { display: none; }
+    textarea { width: 100%; height: 200px; margin-top: 15px; font-family: monospace; }
+    a { display: block; margin-top: 15px; }
+  </style>
 </head>
 <body>
-  <h1>OCR: Распознавание текста с фото</h1>
-  <button onclick="location.href='index.html'">🏠 Назад к учёту товаров</button>
-  <!-- Здесь будет логика OCR -->
+  <h2>📷 Распознавание текста (OCR)</h2>
+
+  <button onclick="startCamera()">Включить камеру</button>
+  <video id="video" autoplay></video>
+  <button id="snapBtn" onclick="captureAndRecognize()" style="display:none;">📸 Сфотографировать и распознать</button>
+
+  <canvas id="canvas"></canvas>
+  <textarea id="ocrResult" placeholder="Тут появится текст..."></textarea>
+
+  <a href="index.html">← Вернуться к учёту товаров</a>
+
+  <script>
+    let stream;
+
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+        .then(s => {
+          stream = s;
+          const video = document.getElementById('video');
+          video.srcObject = stream;
+          document.getElementById('snapBtn').style.display = 'inline-block';
+        })
+        .catch(err => alert("Ошибка доступа к камере: " + err));
+    }
+
+    function captureAndRecognize() {
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Остановить камеру
+      stream.getTracks().forEach(track => track.stop());
+      document.getElementById('snapBtn').style.display = 'none';
+
+      const dataUrl = canvas.toDataURL('image/png');
+      document.getElementById('ocrResult').value = "⏳ Распознавание...";
+
+      Tesseract.recognize(
+        dataUrl,
+        'rus+eng',
+        {
+          logger: m => console.log(m)
+        }
+      ).then(({ data: { text } }) => {
+        document.getElementById('ocrResult').value = text;
+      }).catch(err => {
+        document.getElementById('ocrResult').value = "❌ Ошибка распознавания: " + err;
+      });
+    }
+  </script>
 </body>
 </html>
