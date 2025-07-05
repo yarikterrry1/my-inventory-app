@@ -3,9 +3,10 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Учёт товаров + Сканер + OCR</title>
+  <title>Учет товаров + Штрихкод-сканер</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.2.6/dist/quagga.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; max-width: 900px; margin: auto; }
     input, button, select { margin: 5px 0; padding: 5px; width: 100%; }
@@ -19,7 +20,11 @@
 </head>
 <body>
   <h2>Учет товаров + Штрихкод-сканер + Аналитика</h2>
-  <a href="ocr.html" style="display:block; margin: 10px 0;">📷 Перейти к распознаванию с фото (OCR)</a>
+
+  <h3>📷 Сканер штрихкодов</h3>
+  <select id="cameraSelect"></select>
+  <div id="scannerPreview" style="width: 100%; max-width: 400px; height: auto; border: 1px solid #ccc;"></div>
+  <button onclick="restartScanner()">🔄 Перезапустить сканер</button>
 
   <label for="mode">Режим сканера:</label>
   <select id="mode">
@@ -68,235 +73,79 @@
 
   <script>
     let products = [];
+    let scannerActive = false;
+    let selectedDeviceId = null;
     const beep = new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg');
 
-    document.getElementById('mode').addEventListener('change', function () {
-      const mode = this.value;
-      const salePanel = document.getElementById('salePanel');
-      if (mode === 'out') {
-        salePanel.style.display = 'block';
-        populateProductSelect();
-      } else {
-        salePanel.style.display = 'none';
+    function startScanner() {
+      if (scannerActive) {
+        Quagga.stop();
       }
+
+      Quagga.init({
+        inputStream: {
+          type: "LiveStream",
+          constraints: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: "environment",
+            deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+            advanced: [{ focusMode: "continuous" }]
+          },
+          target: document.querySelector('#scannerPreview')
+        },
+        locator: { patchSize: "medium", halfSample: true },
+        numOfWorkers: navigator.hardwareConcurrency || 4,
+        decoder: {
+          readers: ["ean_reader", "ean_8_reader", "code_128_reader"]
+        },
+        locate: true
+      }, err => {
+        if (err) {
+          console.error("Ошибка инициализации сканера:", err);
+          return;
+        }
+        Quagga.start();
+        scannerActive = true;
+      });
+
+      Quagga.onDetected(data => {
+        const code = data.codeResult.code;
+        document.getElementById("barcode").value = code;
+        beep.play();
+        Quagga.stop();
+        scannerActive = false;
+      });
+    }
+
+    function restartScanner() {
+      startScanner();
+    }
+
+    function listCameras() {
+      navigator.mediaDevices.enumerateDevices()
+        .then(devices => {
+          const select = document.getElementById('cameraSelect');
+          select.innerHTML = '';
+          devices.forEach(device => {
+            if (device.kind === 'videoinput') {
+              const option = document.createElement('option');
+              option.value = device.deviceId;
+              option.text = device.label || `Камера ${select.length + 1}`;
+              select.appendChild(option);
+            }
+          });
+          selectedDeviceId = select.value;
+          startScanner();
+        });
+    }
+
+    document.getElementById('cameraSelect').addEventListener('change', function () {
+      selectedDeviceId = this.value;
+      startScanner();
     });
 
-    function populateProductSelect() {
-      const select = document.getElementById('productSelect');
-      select.innerHTML = '<option value="">—</option>';
-      products.forEach((p, i) => {
-        select.innerHTML += `<option value="${i}">${p.name} (${p.qty} шт.)</option>`;
-      });
-    }
-
-    function onProductSelect() {
-      const index = document.getElementById('productSelect').value;
-      if (index !== '') {
-        const p = products[index];
-        document.getElementById('name').value = p.name;
-        document.getElementById('barcode').value = p.barcode;
-        document.getElementById('price').value = p.price;
-        document.getElementById('qty').value = 1;
-        document.getElementById('expiry').value = p.expiry || '';
-      }
-    }
-
-    function sellProduct() {
-      const index = document.getElementById('productSelect').value;
-      const qtyToSell = parseInt(document.getElementById('qty').value);
-      if (index === '' || isNaN(qtyToSell) || qtyToSell <= 0) {
-        alert('Выберите товар и укажите корректное количество');
-        return;
-      }
-
-      const p = products[index];
-      if (p.qty < qtyToSell) {
-        alert('Недостаточно товара на складе');
-        return;
-      }
-
-      p.qty -= qtyToSell;
-      const today = new Date().toISOString().split('T')[0];
-      p.sales = p.sales || [];
-      for (let i = 0; i < qtyToSell; i++) p.sales.push(today);
-
-      if (p.qty === 0) products.splice(index, 1);
-      renderTable();
-      populateProductSelect();
-    }
-
-    function renderTable() {
-      const tbody = document.querySelector('#productTable tbody');
-      tbody.innerHTML = '';
-      const today = new Date();
-      products.forEach((p, i) => {
-        const row = document.createElement('tr');
-        const expiry = p.expiry ? new Date(p.expiry) : null;
-        if (expiry && (expiry - today) / (1000 * 60 * 60 * 24) <= 3) {
-          row.classList.add('expiring');
-        } else if (p.sales && p.sales.length <= 3) {
-          row.classList.add('low-demand');
-        }
-        const discount = expiry && (expiry - today) / (1000 * 60 * 60 * 24) <= 3 ? ' (Скидка -50%)' : '';
-        row.innerHTML = `
-          <td>${p.name}${discount}</td>
-          <td>${p.barcode}</td>
-          <td>${p.price}</td>
-          <td>${p.qty}</td>
-          <td>${p.expiry || ''}</td>
-          <td><button onclick="deleteProduct(${i})">Удалить</button></td>
-        `;
-        tbody.appendChild(row);
-      });
-    }
-
-    function addProduct() {
-      const name = document.getElementById('name').value.trim();
-      const barcode = document.getElementById('barcode').value.trim();
-      const price = parseFloat(document.getElementById('price').value);
-      const qty = parseInt(document.getElementById('qty').value);
-      const expiry = document.getElementById('expiry').value;
-      if (!name || !barcode || isNaN(price) || isNaN(qty)) {
-        alert('Заполните все поля корректно');
-        return;
-      }
-      const existing = products.find(p => p.barcode === barcode);
-      if (existing) {
-        existing.qty += qty;
-        if (expiry) existing.expiry = expiry;
-      } else {
-        products.push({ name, barcode, price, qty, expiry, sales: [] });
-      }
-      document.getElementById('name').value = '';
-      document.getElementById('barcode').value = '';
-      document.getElementById('price').value = '';
-      document.getElementById('qty').value = '';
-      document.getElementById('expiry').value = '';
-      renderTable();
-    }
-
-    function deleteProduct(index) {
-      products.splice(index, 1);
-      renderTable();
-    }
-
-    function saveData() {
-      localStorage.setItem('products', JSON.stringify(products));
-      alert('Данные сохранены');
-    }
-
-    function loadData() {
-      const data = localStorage.getItem('products');
-      if (data) {
-        products = JSON.parse(data);
-        renderTable();
-        alert('Данные загружены');
-      }
-    }
-
-    function exportJSON() {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(products));
-      const dl = document.createElement('a');
-      dl.setAttribute("href", dataStr);
-      dl.setAttribute("download", "products.json");
-      dl.click();
-    }
-
-    function exportExcel() {
-      const worksheet = XLSX.utils.json_to_sheet(products);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Товары");
-      XLSX.writeFile(workbook, "products.xlsx");
-    }
-
-    function analyzeDemand() {
-      const now = new Date();
-      products.forEach(p => {
-        if (!p.sales) return;
-        const last30 = p.sales.filter(date => (now - new Date(date)) <= 30 * 24 * 60 * 60 * 1000);
-        p.sales = last30;
-      });
-      renderTable();
-      drawChart();
-      alert('Анализ спроса завершён.');
-    }
-
-    function drawChart() {
-      const ctx = document.getElementById('salesChart').getContext('2d');
-      const labels = products.map(p => p.name);
-      const data = products.map(p => (p.sales ? p.sales.length : 0));
-      new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [{
-            label: 'Продажи за 30 дней',
-            data,
-            borderWidth: 1
-          }]
-        }
-      });
-    }
-
-    function printReceipt() {
-      const soldItems = [];
-      const today = new Date().toISOString().split('T')[0];
-      products.forEach(p => {
-        if (p.sales) {
-          const todaySales = p.sales.filter(date => date === today).length;
-          if (todaySales > 0) {
-            soldItems.push({
-              name: p.name,
-              qty: todaySales,
-              price: p.price,
-              total: p.price * todaySales
-            });
-          }
-        }
-      });
-
-      if (soldItems.length === 0) {
-        alert("Нет проданных сегодня товаров для печати чека.");
-        return;
-      }
-
-      const totalSum = soldItems.reduce((sum, item) => sum + item.total, 0).toFixed(2);
-
-      const wnd = window.open('', 'Чек', 'width=300,height=600');
-      wnd.document.write(`
-        <html>
-          <head>
-            <style>
-              body { font-family: monospace; font-size: 12px; margin: 0; padding: 10px; }
-              h2 { text-align: center; }
-              table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-              td { padding: 2px 0; }
-              .right { text-align: right; }
-            </style>
-          </head>
-          <body>
-            <h2>МАГАЗИН "У ДОМА"</h2>
-            <p>${new Date().toLocaleString()}</p>
-            <hr>
-            <table>
-              ${soldItems.map(item => `
-                <tr>
-                  <td>${item.name} x${item.qty}</td>
-                  <td class="right">${item.total.toFixed(2)} ₽</td>
-                </tr>
-              `).join('')}
-            </table>
-            <hr>
-            <p class="right"><strong>ИТОГО: ${totalSum} ₽</strong></p>
-            <p>Спасибо за покупку!</p>
-          </body>
-        </html>
-      `);
-      wnd.document.close();
-      wnd.focus();
-      wnd.print();
-      wnd.close();
-    }
+    window.addEventListener('load', listCameras);
   </script>
 </body>
 </html>
